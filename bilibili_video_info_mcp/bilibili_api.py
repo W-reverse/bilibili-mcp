@@ -53,8 +53,12 @@ def extract_bvid_and_page(url):
     bvid = bvid_match.group(0) if bvid_match else None
     
     # 提取 p 参数（分P页码），默认为 1
-    page_match = re.search(r'[?&]p=(\d+)', final_url)
-    page = int(page_match.group(1)) if page_match else 1
+    # 支持 &p=, ?p=, &amp;p= (HTML编码) 等格式
+    page_match = re.search(r'[?&]p=(\d+)|&amp;p=(\d+)', final_url)
+    if page_match:
+        page = int(page_match.group(1) or page_match.group(2))
+    else:
+        page = 1
     
     return bvid, page
 
