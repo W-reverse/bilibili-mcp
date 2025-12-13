@@ -116,5 +116,6 @@ export SESSDATA="your SESSDATA value"
 
 Standard Bilibili video links are supported, such as:
 - https://www.bilibili.com/video/BV1x341177NN
+- https://www.bilibili.com/video/BV1x341177NN?p=xx
 - https://b23.tv/xxxxx (short links)
 - Any link containing a BV number
