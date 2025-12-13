@@ -31,29 +31,49 @@ def _get_headers():
         headers['Cookie'] = f'SESSDATA={SESSDATA}'
     return headers
 
-def extract_bvid(url):
-    # 先尝试直接从URL中提取BV号
-    match = re.search(r'BV[a-zA-Z0-9_]+', url)
-    if match:
-        return match.group(0)
+def extract_bvid_and_page(url):
+    """Extract BV number and page number from URL.
+    
+    Returns:
+        tuple: (bvid, page_number) where page_number defaults to 1
+    """
+    final_url = url
     
     # 如果是短链接（如b23.tv），则跟踪重定向获取完整URL
     if 'b23.tv' in url:
         try:
             response = requests.head(url, headers=_get_headers(), allow_redirects=True)
             if response.status_code == 200:
-                # 获取最终重定向后的URL
                 final_url = response.url
-                match = re.search(r'BV[a-zA-Z0-9_]+', final_url)
-                if match:
-                    return match.group(0)
         except requests.RequestException as e:
             print(f"Error resolving short URL: {e}")
     
-    return None
+    # 提取 BV 号
+    bvid_match = re.search(r'BV[a-zA-Z0-9_]+', final_url)
+    bvid = bvid_match.group(0) if bvid_match else None
+    
+    # 提取 p 参数（分P页码），默认为 1
+    page_match = re.search(r'[?&]p=(\d+)', final_url)
+    page = int(page_match.group(1)) if page_match else 1
+    
+    return bvid, page
 
-def get_video_basic_info(bvid):
-    """Gets aid and cid for a given bvid."""
+
+def extract_bvid(url):
+    """Extract BV number from URL (backward compatible)."""
+    bvid, _ = extract_bvid_and_page(url)
+    return bvid
+
+def get_video_basic_info(bvid, page=1):
+    """Gets aid and cid for a given bvid and page number.
+    
+    Args:
+        bvid: The BV number of the video
+        page: The page number (1-indexed), defaults to 1
+        
+    Returns:
+        tuple: (aid, cid, error)
+    """
     headers = _get_headers()
     try:
         params_view = {'bvid': bvid}
@@ -65,7 +85,17 @@ def get_video_basic_info(bvid):
             return None, None, {'error': 'Failed to get video info', 'details': data_view}
 
         video_data = data_view['data']
-        return video_data.get('aid'), video_data.get('cid'), None
+        aid = video_data.get('aid')
+        
+        # 获取分P列表，找到对应页码的 cid
+        pages = video_data.get('pages', [])
+        if pages and 1 <= page <= len(pages):
+            cid = pages[page - 1].get('cid')
+        else:
+            # 如果没有分P信息或页码超出范围，使用默认 cid
+            cid = video_data.get('cid')
+            
+        return aid, cid, None
     except requests.RequestException as e:
         return None, None, {'error': f'Failed to fetch video details: {e}'}
 

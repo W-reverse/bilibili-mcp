@@ -24,11 +24,11 @@ async def get_subtitles(url: str) -> list:
     Returns:
         List of subtitles grouped by language. Each entry contains subtitle content with timestamps.
     """
-    bvid = bilibili_api.extract_bvid(url)
+    bvid, page = bilibili_api.extract_bvid_and_page(url)
     if not bvid:
         return [f"错误: 无法从 URL 提取 BV 号: {url}"]
     
-    aid, cid, error = bilibili_api.get_video_basic_info(bvid)
+    aid, cid, error = bilibili_api.get_video_basic_info(bvid, page)
     if error:
         return [f"获取视频信息失败: {error['error']}"]
     
@@ -57,11 +57,11 @@ async def get_danmaku(url: str) -> list:
     Returns:
         List of danmaku (bullet comments) with content, timestamp and user information
     """
-    bvid = bilibili_api.extract_bvid(url)
+    bvid, page = bilibili_api.extract_bvid_and_page(url)
     if not bvid:
         return [f"错误: 无法从 URL 提取 BV 号: {url}"]
     
-    aid, cid, error = bilibili_api.get_video_basic_info(bvid)
+    aid, cid, error = bilibili_api.get_video_basic_info(bvid, page)
     if error:
         return [f"获取视频信息失败: {error['error']}"]
     
@@ -90,11 +90,11 @@ async def get_comments(url: str) -> list:
     Returns:
         List of popular comments including comment content, user information, and metadata such as like counts
     """
-    bvid = bilibili_api.extract_bvid(url)
+    bvid, page = bilibili_api.extract_bvid_and_page(url)
     if not bvid:
         return [f"错误: 无法从 URL 提取 BV 号: {url}"]
     
-    aid, cid, error = bilibili_api.get_video_basic_info(bvid)
+    aid, cid, error = bilibili_api.get_video_basic_info(bvid, page)
     if error:
         return [f"获取视频信息失败: {error['error']}"]
     
