@@ -115,6 +115,7 @@ export SESSDATA="你的SESSDATA值"
 
 支持标准的 Bilibili 视频链接，例如：
 - https://www.bilibili.com/video/BV1x341177NN
+- https://www.bilibili.com/video/BV1x341177NN?p=xx（分p视频格式）
 - https://b23.tv/xxxxx (短链接)
 - 包含 BV 号的任何链接
 
