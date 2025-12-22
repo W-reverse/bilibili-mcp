@@ -4,16 +4,21 @@
 
 A Bilibili MCP Server that can retrieve subtitles, danmaku (bullet comments), and comments information from videos using the video URL.
 
+> This is a fork of [lesir831/bilibili-video-info-mcp](https://github.com/lesir831/bilibili-video-info-mcp) with added support for multi-part videos (分P视频).
+
 ## Usage
 
 This MCP server supports three transport methods:
 1. **stdio** 
+
+**Install from GitHub:**
 ```json
 {
     "mcpServers": {
         "bilibili-video-info-mcp": {
             "command": "uvx",
             "args": [
+                "--from", "git+https://github.com/W-reverse/bilibili-video-info-mcp.git",
                 "bilibili-video-info-mcp"
             ],
             "env": {
@@ -115,6 +120,6 @@ export SESSDATA="your SESSDATA value"
 
 Standard Bilibili video links are supported, such as:
 - https://www.bilibili.com/video/BV1x341177NN
-- https://www.bilibili.com/video/BV1x341177NN?p=xx
+- https://www.bilibili.com/video/BV1x341177NN?p=2 (multi-part videos)
 - https://b23.tv/xxxxx (short links)
 - Any link containing a BV number

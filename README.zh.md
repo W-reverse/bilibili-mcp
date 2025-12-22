@@ -4,16 +4,21 @@
 
 Bilibili MCP Server，可以获取根据视频 url 获取视频的字幕、弹幕和评论信息。
 
+> 这是 [lesir831/bilibili-video-info-mcp](https://github.com/lesir831/bilibili-video-info-mcp) 的 fork，新增了对分P视频的支持。
+
 ## 使用方法
 
 MCP Server 支持三种通信方式：
 1. **stdio**
+
+**从 GitHub 安装：**
 ```json
 {
     "mcpServers": {
         "bilibili-video-info-mcp": {
             "command": "uvx",
             "args": [
+                "--from", "git+https://github.com/W-reverse/bilibili-video-info-mcp.git",
                 "bilibili-video-info-mcp"
             ],
             "env": {
@@ -115,7 +120,7 @@ export SESSDATA="你的SESSDATA值"
 
 支持标准的 Bilibili 视频链接，例如：
 - https://www.bilibili.com/video/BV1x341177NN
-- https://www.bilibili.com/video/BV1x341177NN?p=xx（分p视频格式）
+- https://www.bilibili.com/video/BV1x341177NN?p=2 (分P视频)
 - https://b23.tv/xxxxx (短链接)
 - 包含 BV 号的任何链接
 
