@@ -66,13 +66,27 @@ uvx run --env .env bilibili-video-info-mcp streamable-http
 
 ## MCP 工具列表
 
+所有工具都支持 `page` 参数，用于指定分P视频的页码。这解决了某些 LLM 客户端可能截断 URL 导致无法正确获取分P视频的问题。
+
 ### 1. 获取视频字幕列表
 
 ```json
 {
   "name": "get_subtitles",
   "arguments": {
-    "url": "https://www.bilibili.com/video/BV1x341177NN"
+    "url": "https://www.bilibili.com/video/BV1x341177NN",
+    "page": 1
+  }
+}
+```
+
+获取分P视频第2集的字幕：
+```json
+{
+  "name": "get_subtitles",
+  "arguments": {
+    "url": "https://www.bilibili.com/video/BV1x341177NN",
+    "page": 2
   }
 }
 ```
@@ -83,7 +97,8 @@ uvx run --env .env bilibili-video-info-mcp streamable-http
 {
   "name": "get_danmaku",
   "arguments": {
-    "url": "https://www.bilibili.com/video/BV1x341177NN"
+    "url": "https://www.bilibili.com/video/BV1x341177NN",
+    "page": 1
   }
 }
 ```
@@ -94,10 +109,18 @@ uvx run --env .env bilibili-video-info-mcp streamable-http
 {
   "name": "get_comments",
   "arguments": {
-    "url": "https://www.bilibili.com/video/BV1x341177NN"
+    "url": "https://www.bilibili.com/video/BV1x341177NN",
+    "page": 1
   }
 }
 ```
+
+### 参数说明
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| url | string | 是 | - | Bilibili 视频链接 |
+| page | int | 否 | 1 | 分P视频的页码，优先级高于 URL 中的 p 参数 |
 
 ## 常见问题
 

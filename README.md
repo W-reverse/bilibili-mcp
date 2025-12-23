@@ -66,13 +66,27 @@ then config your mcp client
 
 ## MCP Tools List
 
+All tools support a `page` parameter to specify the page number for multi-part videos. This solves the issue where some LLM clients may truncate URLs, causing incorrect retrieval of multi-part video content.
+
 ### 1. Get Video Subtitles
 
 ```json
 {
   "name": "get_subtitles",
   "arguments": {
-    "url": "https://www.bilibili.com/video/BV1x341177NN"
+    "url": "https://www.bilibili.com/video/BV1x341177NN",
+    "page": 1
+  }
+}
+```
+
+Get subtitles for part 2 of a multi-part video:
+```json
+{
+  "name": "get_subtitles",
+  "arguments": {
+    "url": "https://www.bilibili.com/video/BV1x341177NN",
+    "page": 2
   }
 }
 ```
@@ -83,7 +97,8 @@ then config your mcp client
 {
   "name": "get_danmaku",
   "arguments": {
-    "url": "https://www.bilibili.com/video/BV1x341177NN"
+    "url": "https://www.bilibili.com/video/BV1x341177NN",
+    "page": 1
   }
 }
 ```
@@ -94,10 +109,18 @@ then config your mcp client
 {
   "name": "get_comments",
   "arguments": {
-    "url": "https://www.bilibili.com/video/BV1x341177NN"
+    "url": "https://www.bilibili.com/video/BV1x341177NN",
+    "page": 1
   }
 }
 ```
+
+### Parameter Reference
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| url | string | Yes | - | Bilibili video URL |
+| page | int | No | 1 | Page number for multi-part videos. Takes priority over URL's p parameter |
 
 ## FAQ
 
