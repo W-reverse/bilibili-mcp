@@ -9,7 +9,7 @@ description = "An MCP server to fetch Bilibili video information like subtitles,
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "mcp[cli]>=1.11.0",
+    "mcp[cli]>=1.11.0,<3",
     "requests",
 ]
 authors = [

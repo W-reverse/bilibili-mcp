@@ -2,11 +2,16 @@
 Bilibili视频信息MCP服务器的核心模块
 """
 
-from mcp.server.fastmcp import FastMCP
+try:
+    # MCP Python SDK 2.x renamed FastMCP to MCPServer.
+    from mcp.server import MCPServer
+except ImportError:  # pragma: no cover - exercised with MCP Python SDK 1.x
+    from mcp.server.fastmcp import FastMCP as MCPServer
+
 from . import bilibili_api
 
-# 创建 FastMCP 服务器实例，命名为 BilibiliVideoInfo
-mcp = FastMCP("BilibiliVideoInfo", dependencies=["requests"])
+# 创建 MCP 服务器实例，命名为 BilibiliVideoInfo
+mcp = MCPServer("BilibiliVideoInfo", dependencies=["requests"])
 
 @mcp.tool(
     annotations={
@@ -126,10 +131,3 @@ async def get_comments(url: str, page: int = 1) -> list:
         return ["该视频没有热门评论"]
 
     return comments
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Bilibili Video Info MCP Server")
-    parser.add_argument('transport', nargs='?', default='stdio', choices=['stdio', 'sse', 'streamable-http'],
-                        help='Transport type (stdio, sse, or streamable-http)')
-    args = parser.parse_args()
-    mcp.run(transport=args.transport)
