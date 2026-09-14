@@ -1,7 +1,10 @@
-import re
-import requests
-import xml.etree.ElementTree as ET
 import os
+import re
+import xml.etree.ElementTree as ET
+from urllib.parse import urlsplit
+
+import requests
+
 
 def get_seesdata() -> str:
     """Get the Bilibili SESSDATA from environment variables"""
@@ -15,9 +18,18 @@ SESSDATA = get_seesdata()
 
 # Bilibili API endpoints
 API_GET_VIEW_INFO = "https://api.bilibili.com/x/web-interface/view"
+# WBI-path variant of the view endpoint. Used only as a fallback when the
+# legacy path is rejected by anti-crawl (HTTP 403/412); same response shape.
+API_GET_VIEW_INFO_WBI = "https://api.bilibili.com/x/web-interface/wbi/view"
 API_GET_SUBTITLE = "https://api.bilibili.com/x/player/wbi/v2"
 API_GET_DANMAKU = "https://api.bilibili.com/x/v1/dm/list.so"
 API_GET_COMMENTS = "https://api.bilibili.com/x/v2/reply"
+
+# Finite per-request timeout (seconds) for the requests handled by this fix
+# (view/subtitle/danmaku). Not applied to the untouched comments call.
+DEFAULT_TIMEOUT = 15
+# HTTP statuses from the primary view endpoint that trigger the WBI fallback.
+VIEW_FALLBACK_STATUS = (403, 412)
 
 # Default Headers for requests
 DEFAULT_HEADERS = {
@@ -31,6 +43,29 @@ def _get_headers():
         headers['Cookie'] = f'SESSDATA={SESSDATA}'
     return headers
 
+def _http_status_of(error):
+    """Return the HTTP status attached to a requests exception, if any."""
+    return getattr(getattr(error, 'response', None), 'status_code', None)
+
+def _resolve_subtitle_url(raw_url):
+    """Return an absolute https URL for a subtitle file, or None if unsupported.
+
+    Supports both protocol-relative ("//host/path.json") and absolute https
+    URLs. Anything else (missing, http://, other schemes) is rejected.
+    """
+    if not isinstance(raw_url, str) or not raw_url:
+        return None
+    if raw_url.startswith('//'):
+        candidate = 'https:' + raw_url
+    elif raw_url.startswith('https://'):
+        candidate = raw_url
+    else:
+        return None
+    parts = urlsplit(candidate)
+    if parts.scheme != 'https' or not parts.netloc:
+        return None
+    return candidate
+
 def extract_bvid_and_page(url):
     """Extract BV number and page number from URL.
     
@@ -42,7 +77,7 @@ def extract_bvid_and_page(url):
     # 如果是短链接（如b23.tv），则跟踪重定向获取完整URL
     if 'b23.tv' in url:
         try:
-            response = requests.head(url, headers=_get_headers(), allow_redirects=True)
+            response = requests.head(url, headers=_get_headers(), allow_redirects=True, timeout=DEFAULT_TIMEOUT)
             if response.status_code == 200:
                 final_url = response.url
         except requests.RequestException as e:
@@ -70,6 +105,11 @@ def extract_bvid(url):
 
 def get_video_basic_info(bvid, page=1):
     """Gets aid and cid for a given bvid and page number.
+
+    The primary ``/x/web-interface/view`` endpoint is tried first. When it is
+    rejected by anti-crawl with HTTP 403/412, the same request is retried once
+    against the WBI-path variant, which returns an identical response shape
+    (so aid/cid/pages are read the same way).
     
     Args:
         bvid: The BV number of the video
@@ -79,58 +119,125 @@ def get_video_basic_info(bvid, page=1):
         tuple: (aid, cid, error)
     """
     headers = _get_headers()
+    params_view = {'bvid': bvid}
+    used_view_url = API_GET_VIEW_INFO
     try:
-        params_view = {'bvid': bvid}
-        response_view = requests.get(API_GET_VIEW_INFO, params=params_view, headers=headers)
+        response_view = requests.get(API_GET_VIEW_INFO, params=params_view, headers=headers, timeout=DEFAULT_TIMEOUT)
+        if response_view.status_code in VIEW_FALLBACK_STATUS:
+            used_view_url = API_GET_VIEW_INFO_WBI
+            response_view = requests.get(API_GET_VIEW_INFO_WBI, params=params_view, headers=headers, timeout=DEFAULT_TIMEOUT)
         response_view.raise_for_status()
         data_view = response_view.json()
-
-        if data_view['code'] != 0:
-            return None, None, {'error': 'Failed to get video info', 'details': data_view}
-
-        video_data = data_view['data']
-        aid = video_data.get('aid')
-        
-        # 获取分P列表，找到对应页码的 cid
-        pages = video_data.get('pages', [])
-        if pages and 1 <= page <= len(pages):
-            cid = pages[page - 1].get('cid')
-        else:
-            # 如果没有分P信息或页码超出范围，使用默认 cid
-            cid = video_data.get('cid')
-            
-        return aid, cid, None
     except requests.RequestException as e:
-        return None, None, {'error': f'Failed to fetch video details: {e}'}
+        status = _http_status_of(e)
+        detail = f'HTTP {status}' if status is not None else type(e).__name__
+        return None, None, {'error': f'Failed to fetch video details from {used_view_url}: {detail}'}
+    except ValueError:
+        return None, None, {'error': f'Failed to parse video info from {used_view_url}'}
+
+    if not isinstance(data_view, dict):
+        return None, None, {'error': f'Unexpected video info response from {used_view_url}'}
+    if data_view.get('code') != 0:
+        return None, None, {'error': 'Failed to get video info', 'details': data_view}
+
+    video_data = data_view.get('data')
+    if not isinstance(video_data, dict):
+        return None, None, {'error': f'Unexpected video info data from {used_view_url}'}
+
+    aid = video_data.get('aid')
+
+    # 获取分P列表，找到对应页码的 cid
+    pages = video_data.get('pages')
+    cid = None
+    if pages is None:
+        # 没有分P信息，使用默认 cid
+        cid = video_data.get('cid')
+    elif not isinstance(pages, list):
+        return None, None, {'error': f'Unexpected pages format from {used_view_url}'}
+    elif 1 <= page <= len(pages):
+        entry = pages[page - 1]
+        if not isinstance(entry, dict):
+            return None, None, {'error': f'Unexpected page entry from {used_view_url}'}
+        cid = entry.get('cid')
+    else:
+        # 页码超出范围，使用默认 cid
+        cid = video_data.get('cid')
+
+    if aid is None or cid is None:
+        return None, None, {'error': f'Missing aid/cid in response from {used_view_url}'}
+
+    return aid, cid, None
 
 def get_subtitles(aid, cid):
     """Fetches subtitles for a given aid and cid."""
     headers = _get_headers()
-    subtitles = []
     try:
         params_subtitle = {'aid': aid, 'cid': cid}
-        response_subtitle = requests.get(API_GET_SUBTITLE, params=params_subtitle, headers=headers)
+        response_subtitle = requests.get(API_GET_SUBTITLE, params=params_subtitle, headers=headers, timeout=DEFAULT_TIMEOUT)
         response_subtitle.raise_for_status()
         subtitle_data = response_subtitle.json()
-        if subtitle_data.get('code') == 0 and subtitle_data.get('data', {}).get('subtitle', {}).get('subtitles'):
-            for sub_meta in subtitle_data['data']['subtitle']['subtitles']:
-                if sub_meta.get('subtitle_url'):
-                    try:
-                        subtitle_json_url = f"https:{sub_meta['subtitle_url']}"
-                        response_sub_content = requests.get(subtitle_json_url, headers=headers)
-                        response_sub_content.raise_for_status()
-                        sub_content = response_sub_content.json()
-                        subtitle_body = sub_content.get('body', [])
-                        content_list = [item.get('content', '') for item in subtitle_body]
-                        subtitles.append({
-                            'lan': sub_meta['lan'],
-                            'content': content_list
-                        })
-                    except requests.RequestException as e:
-                        print(f"Could not fetch or parse subtitle content from {sub_meta.get('subtitle_url')}: {e}")
-        return subtitles, None
     except requests.RequestException as e:
-        return [], {'error': f'Could not fetch subtitles: {e}'}
+        status = _http_status_of(e)
+        detail = f'HTTP {status}' if status is not None else type(e).__name__
+        return [], {'error': f'Could not fetch subtitles from {API_GET_SUBTITLE}: {detail}'}
+    except ValueError:
+        return [], {'error': f'Failed to parse subtitle metadata from {API_GET_SUBTITLE}'}
+
+    if not isinstance(subtitle_data, dict) or subtitle_data.get('code') != 0:
+        # 业务错误与"没有字幕"必须区分
+        return [], {'error': f'Failed to get subtitle info from {API_GET_SUBTITLE}'}
+
+    data = subtitle_data.get('data')
+    if data is None:
+        return [], None
+    if not isinstance(data, dict):
+        return [], {'error': f'Unexpected subtitle data from {API_GET_SUBTITLE}'}
+
+    subtitle = data.get('subtitle')
+    if subtitle is None:
+        return [], None
+    if not isinstance(subtitle, dict):
+        return [], {'error': f'Unexpected subtitle metadata from {API_GET_SUBTITLE}'}
+
+    subtitle_meta = subtitle.get('subtitles')
+    if subtitle_meta is None or subtitle_meta == []:
+        return [], None
+    if not isinstance(subtitle_meta, list):
+        return [], {'error': f'Unexpected subtitle metadata from {API_GET_SUBTITLE}'}
+
+    subtitles = []
+    for sub_meta in subtitle_meta:
+        if not isinstance(sub_meta, dict):
+            return [], {'error': f'Unexpected subtitle metadata from {API_GET_SUBTITLE}'}
+        subtitle_json_url = _resolve_subtitle_url(sub_meta.get('subtitle_url'))
+        if subtitle_json_url is None:
+            # 有字幕条目但 URL 缺失/不受支持：明确报错，绝不静默当作"无字幕"。
+            return [], {'error': f'Unsupported subtitle URL from {API_GET_SUBTITLE}'}
+        try:
+            # 绝不把账号 Cookie(SESSDATA) 发送给（可能第三方的）字幕主机。
+            response_sub_content = requests.get(
+                subtitle_json_url, headers=DEFAULT_HEADERS, timeout=DEFAULT_TIMEOUT)
+            response_sub_content.raise_for_status()
+            sub_content = response_sub_content.json()
+        except requests.RequestException:
+            # 不回显带签名的 URL，也不输出响应内容。
+            return [], {'error': 'Failed to fetch subtitle content'}
+        except ValueError:
+            return [], {'error': 'Failed to parse subtitle content'}
+
+        if not isinstance(sub_content, dict) or not isinstance(sub_content.get('body'), list):
+            return [], {'error': 'Unexpected subtitle content format'}
+        content_list = []
+        for item in sub_content['body']:
+            if not isinstance(item, dict):
+                return [], {'error': 'Unexpected subtitle content format'}
+            content_list.append(item.get('content', ''))
+        subtitles.append({
+            'lan': sub_meta.get('lan', 'unknown'),
+            'content': content_list
+        })
+
+    return subtitles, None
 
 def get_danmaku(cid):
     """Fetches danmaku for a given cid."""
@@ -138,14 +245,23 @@ def get_danmaku(cid):
     danmaku_list = []
     try:
         params_danmaku = {'oid': cid}
-        response_danmaku = requests.get(API_GET_DANMAKU, params=params_danmaku, headers=headers)
+        response_danmaku = requests.get(API_GET_DANMAKU, params=params_danmaku, headers=headers, timeout=DEFAULT_TIMEOUT)
+        # 风控/错误响应（如 412 HTML 页）必须暴露为错误，
+        # 绝不能因为解析失败而被当成"该视频没有弹幕"。
+        response_danmaku.raise_for_status()
         danmaku_content = response_danmaku.content.decode('utf-8', errors='ignore')
         root = ET.fromstring(danmaku_content)
+        if root.tag != 'i':
+            return [], {'error': f'Unexpected danmaku response from {API_GET_DANMAKU}'}
         for d in root.findall('d'):
             danmaku_list.append(d.text)
         return danmaku_list, None
-    except (requests.RequestException, ET.ParseError) as e:
-        return [], {'error': f'Failed to get or parse danmaku: {e}'}
+    except requests.RequestException as e:
+        status = _http_status_of(e)
+        detail = f'HTTP {status}' if status is not None else type(e).__name__
+        return [], {'error': f'Failed to get danmaku from {API_GET_DANMAKU}: {detail}'}
+    except ET.ParseError:
+        return [], {'error': f'Failed to parse danmaku response from {API_GET_DANMAKU}'}
 
 def get_comments(aid):
     """Fetches comments for a given aid."""
