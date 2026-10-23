@@ -21,6 +21,7 @@ API_GET_VIEW_INFO = "https://api.bilibili.com/x/web-interface/view"
 # WBI-path variant of the view endpoint. Used only as a fallback when the
 # legacy path is rejected by anti-crawl (HTTP 403/412); same response shape.
 API_GET_VIEW_INFO_WBI = "https://api.bilibili.com/x/web-interface/wbi/view"
+API_GET_PAGELIST = "https://api.bilibili.com/x/player/pagelist"
 API_GET_SUBTITLE = "https://api.bilibili.com/x/player/wbi/v2"
 API_GET_DANMAKU = "https://api.bilibili.com/x/v1/dm/list.so"
 API_GET_COMMENTS = "https://api.bilibili.com/x/v2/reply"
@@ -103,13 +104,54 @@ def extract_bvid(url):
     bvid, _ = extract_bvid_and_page(url)
     return bvid
 
+def _get_video_basic_info_from_pagelist(bvid, page, headers):
+    """Resolve cid from the page list, then aid from the player metadata.
+
+    Single-part videos also have one page. An out-of-range page falls back to
+    the first page, matching the default-page behavior of the view endpoints.
+    """
+    used_url = API_GET_PAGELIST
+    try:
+        response = requests.get(
+            used_url, params={'bvid': bvid}, headers=headers, timeout=DEFAULT_TIMEOUT)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get('code') != 0:
+            return None, None, {'error': f'Failed to get video pages from {used_url}'}
+        pages = payload.get('data')
+        if not isinstance(pages, list) or not pages:
+            return None, None, {'error': f'Unexpected video pages from {used_url}'}
+        entry = pages[page - 1] if 1 <= page <= len(pages) else pages[0]
+        if not isinstance(entry, dict) or entry.get('cid') is None:
+            return None, None, {'error': f'Missing cid in video pages from {used_url}'}
+        cid = entry['cid']
+
+        used_url = API_GET_SUBTITLE
+        response = requests.get(
+            used_url, params={'bvid': bvid, 'cid': cid}, headers=headers,
+            timeout=DEFAULT_TIMEOUT)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get('code') != 0:
+            return None, None, {'error': f'Failed to get player info from {used_url}'}
+        player_data = payload.get('data')
+        if not isinstance(player_data, dict) or player_data.get('aid') is None:
+            return None, None, {'error': f'Missing aid in player info from {used_url}'}
+        return player_data['aid'], cid, None
+    except requests.RequestException as e:
+        status = _http_status_of(e)
+        detail = f'HTTP {status}' if status is not None else type(e).__name__
+        return None, None, {'error': f'Failed to fetch video details from {used_url}: {detail}'}
+    except ValueError:
+        return None, None, {'error': f'Failed to parse video info from {used_url}'}
+
+
 def get_video_basic_info(bvid, page=1):
     """Gets aid and cid for a given bvid and page number.
 
-    The primary ``/x/web-interface/view`` endpoint is tried first. When it is
-    rejected by anti-crawl with HTTP 403/412, the same request is retried once
-    against the WBI-path variant, which returns an identical response shape
-    (so aid/cid/pages are read the same way).
+    Try the primary view endpoint, then its WBI variant on HTTP 403/412.
+    If both are blocked, resolve the selected page through pagelist and player
+    metadata instead. Business errors and unrelated HTTP failures are preserved.
     
     Args:
         bvid: The BV number of the video
@@ -126,6 +168,8 @@ def get_video_basic_info(bvid, page=1):
         if response_view.status_code in VIEW_FALLBACK_STATUS:
             used_view_url = API_GET_VIEW_INFO_WBI
             response_view = requests.get(API_GET_VIEW_INFO_WBI, params=params_view, headers=headers, timeout=DEFAULT_TIMEOUT)
+            if response_view.status_code in VIEW_FALLBACK_STATUS:
+                return _get_video_basic_info_from_pagelist(bvid, page, headers)
         response_view.raise_for_status()
         data_view = response_view.json()
     except requests.RequestException as e:

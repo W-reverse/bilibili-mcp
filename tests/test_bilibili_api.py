@@ -1,5 +1,6 @@
 import os
 
+import pytest
 import requests
 
 os.environ.setdefault("SESSDATA", "test-session")
@@ -78,12 +79,17 @@ def test_view_falls_back_on_403(monkeypatch):
     assert bilibili_api.get_video_basic_info("BVTEST") == (9, 10, None)
 
 
-def test_view_fallback_also_fails_reports_status(monkeypatch):
-    install(monkeypatch, lambda url, p, h, t: FakeResponse(412))
+def test_all_video_info_endpoints_blocked_reports_last_status(monkeypatch):
+    calls = install(monkeypatch, lambda url, p, h, t: FakeResponse(412))
     aid, cid, error = bilibili_api.get_video_basic_info("BVTEST")
     assert aid is None and cid is None
     assert "412" in error["error"]
-    assert bilibili_api.API_GET_VIEW_INFO_WBI in error["error"]
+    assert bilibili_api.API_GET_PAGELIST in error["error"]
+    assert [call["url"] for call in calls] == [
+        bilibili_api.API_GET_VIEW_INFO,
+        bilibili_api.API_GET_VIEW_INFO_WBI,
+        bilibili_api.API_GET_PAGELIST,
+    ]
 
 
 def test_view_business_error_not_masked(monkeypatch):
@@ -156,6 +162,115 @@ def test_view_json_decode_error_is_error(monkeypatch):
     aid, cid, error = bilibili_api.get_video_basic_info("BVTEST")
     assert aid is None and cid is None
     assert error is not None and "parse" in error["error"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# Pagelist/player fallback when both view endpoints are blocked
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("statuses", [(412, 412), (403, 412), (412, 403), (403, 403)])
+@pytest.mark.parametrize("cids,page,expected_cid", [
+    ([100], 1, 100),  # A video without multiple parts still has one page.
+    ([100, 200], 2, 200),
+    ([100, 200], 9, 100),  # Preserve the default-page fallback.
+    ([100, 200], 0, 100),
+])
+def test_pagelist_fallback_resolves_single_and_multi_part_videos(
+    monkeypatch, statuses, cids, page, expected_cid
+):
+    def handler(url, params, headers, timeout):
+        if url == bilibili_api.API_GET_VIEW_INFO:
+            return FakeResponse(statuses[0])
+        if url == bilibili_api.API_GET_VIEW_INFO_WBI:
+            return FakeResponse(statuses[1])
+        if url == bilibili_api.API_GET_PAGELIST:
+            assert params == {"bvid": "BVTEST"}
+            return FakeResponse(200, {"code": 0, "data": [{"cid": cid} for cid in cids]})
+        assert url == bilibili_api.API_GET_SUBTITLE
+        assert params == {"bvid": "BVTEST", "cid": expected_cid}
+        # Resolving aid must not depend on this video having subtitles.
+        return FakeResponse(200, {"code": 0, "data": {"aid": 7}})
+
+    calls = install(monkeypatch, handler)
+    assert bilibili_api.get_video_basic_info("BVTEST", page) == (7, expected_cid, None)
+    assert len(calls) == 4
+    assert all(call["timeout"] == bilibili_api.DEFAULT_TIMEOUT for call in calls)
+    assert all(call["headers"]["Cookie"] == f"SESSDATA={bilibili_api.SESSDATA}" for call in calls)
+
+
+def test_unrelated_wbi_http_error_does_not_trigger_pagelist(monkeypatch):
+    def handler(url, params, headers, timeout):
+        return FakeResponse(412 if url == bilibili_api.API_GET_VIEW_INFO else 500)
+
+    calls = install(monkeypatch, handler)
+    aid, cid, error = bilibili_api.get_video_basic_info("BVTEST")
+    assert aid is None and cid is None
+    assert "HTTP 500" in error["error"]
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("payload", [
+    {"code": -404, "data": []},
+    {"code": 0, "data": []},
+    {"code": 0, "data": {}},
+    {"code": 0, "data": [None]},
+    {"code": 0, "data": [{}]},
+    [],
+])
+def test_invalid_pagelist_does_not_call_player(monkeypatch, payload):
+    def handler(url, params, headers, timeout):
+        if url in (bilibili_api.API_GET_VIEW_INFO, bilibili_api.API_GET_VIEW_INFO_WBI):
+            return FakeResponse(412)
+        assert url == bilibili_api.API_GET_PAGELIST
+        return FakeResponse(200, payload)
+
+    calls = install(monkeypatch, handler)
+    aid, cid, error = bilibili_api.get_video_basic_info("BVTEST")
+    assert aid is None and cid is None
+    assert bilibili_api.API_GET_PAGELIST in error["error"]
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("stage", ["pagelist", "player"])
+@pytest.mark.parametrize("failure", ["http", "timeout", "json"])
+def test_pagelist_fallback_request_errors_identify_stage(monkeypatch, stage, failure):
+    failed_url = bilibili_api.API_GET_PAGELIST if stage == "pagelist" else bilibili_api.API_GET_SUBTITLE
+
+    def handler(url, params, headers, timeout):
+        if url in (bilibili_api.API_GET_VIEW_INFO, bilibili_api.API_GET_VIEW_INFO_WBI):
+            return FakeResponse(412)
+        if url == failed_url:
+            if failure == "timeout":
+                raise requests.Timeout("sensitive request details must not be echoed")
+            return FakeResponse(412 if failure == "http" else 200)
+        return FakeResponse(200, {"code": 0, "data": [{"cid": 100}]})
+
+    install(monkeypatch, handler)
+    aid, cid, error = bilibili_api.get_video_basic_info("BVTEST")
+    assert aid is None and cid is None
+    assert failed_url in error["error"]
+    assert "sensitive" not in error["error"]
+    assert {"http": "HTTP 412", "timeout": "Timeout", "json": "parse"}[failure] in error["error"]
+
+
+@pytest.mark.parametrize("payload", [
+    {"code": -101},
+    {"code": 0, "data": {}},
+    {"code": 0, "data": []},
+    [],
+])
+def test_pagelist_fallback_player_error_is_not_video_without_subtitles(monkeypatch, payload):
+    def handler(url, params, headers, timeout):
+        if url in (bilibili_api.API_GET_VIEW_INFO, bilibili_api.API_GET_VIEW_INFO_WBI):
+            return FakeResponse(412)
+        if url == bilibili_api.API_GET_PAGELIST:
+            return FakeResponse(200, {"code": 0, "data": [{"cid": 100}]})
+        return FakeResponse(200, payload)
+
+    install(monkeypatch, handler)
+    aid, cid, error = bilibili_api.get_video_basic_info("BVTEST")
+    assert aid is None and cid is None
+    assert bilibili_api.API_GET_SUBTITLE in error["error"]
 
 
 # --------------------------------------------------------------------------- #

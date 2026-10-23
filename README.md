@@ -146,3 +146,9 @@ Standard Bilibili video links are supported, such as:
 - https://www.bilibili.com/video/BV1x341177NN?p=2 (multi-part videos)
 - https://b23.tv/xxxxx (short links)
 - Any link containing a BV number
+
+### 4. What if fetching video details returns HTTP 403/412?
+
+If both the regular and WBI video-info endpoints return HTTP 403/412, the server automatically gets the selected page's `cid` from the page-list endpoint, then resolves `aid` through the player endpoint. Subtitle, danmaku, and comment retrieval can then continue. Single-part videos also have one page-list entry and use the same fallback.
+
+The fallback requires those endpoints to be accessible, and subtitles still require a valid `SESSDATA`. API failures remain explicit errors rather than being reported as a video without subtitles.
